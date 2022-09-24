@@ -1,34 +1,49 @@
-use std::io::prelude::*;
-use std::net::TcpListener;
-use std::net::TcpStream;
+use iron::{prelude::*, response::WriteBody};
+use read_get_png_request::read_png_reques;
+
+mod read_get_png_request;
 mod png_gen;
 
 fn main() {
-	let listener: TcpListener = TcpListener::bind("127.0.0.1:8000").unwrap();
+	Iron::new(|req: &mut Request| {
 
-	for stream in listener.incoming() {
-		let stream = stream.unwrap();
-		println!("Connection established!");
+		let procesed_data = read_png_reques( req);
+		let mut response = Response::new();
 
-		handle_connection(stream);
-	}
-}
 
-fn handle_connection(mut stream: TcpStream) {
-	let mut buffer = [0; 1024];
+		let response_content: Box<dyn WriteBody + 'static>;
+		if procesed_data.is_err() {
+			response.headers.set(iron::headers::ContentType::plaintext());
 
-	stream.read(&mut buffer).unwrap();
+			let err = procesed_data.err();
 
-	println!("Request: {}", String::from_utf8_lossy(&buffer[..]));
+			if err.is_none() {
+				response.status = Some(iron::status::Status::InternalServerError);
 
-	let response = format!(
-		"HTTP:1.1 200 OK\r\n{}\r\n\r\n",
-		"Content-type: image/png"
-	);
-	let response_content = png_gen::default_png_gen();
-	println!("Headers as bytes: {:?}", response.as_bytes());
-	println!("Answer png made: {:?}", response_content);
+				response_content = Box::new( "unexpected read request error");
+			} else {
+				let inner_err = err.unwrap();
+				response.status = Some(iron::status::Status::BadRequest);
 
-	stream.write(&[response.as_bytes(), &response_content[..]].concat()).unwrap();
-	stream.flush().unwrap();
+				response_content = Box::new( inner_err.as_str());
+			}
+
+		} else {
+			response.status = Some(iron::status::Status::Ok);
+			response.headers.set(iron::headers::ContentType::png());
+
+			let outer_data = procesed_data.unwrap();
+			if outer_data.is_none() {
+				response_content = Box::new( png_gen::default_png_gen());
+			} else {
+				let inner_data = outer_data.unwrap();
+				response_content =  Box::new( png_gen::png_gen(inner_data.width, inner_data.height, inner_data.red, inner_data.green, inner_data.blue, inner_data.alpha));
+			}
+		}
+		let mut _body = response.body.insert(response_content);
+
+
+		return Ok(response);
+
+	}).http("localhost:8000").unwrap();
 }
